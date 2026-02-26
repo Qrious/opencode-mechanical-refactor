@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import { execSync } from "node:child_process";
 import { program } from "commander";
 import { glob } from "glob";
-import { createClient, createSession, modifyFile } from "./opencode.js";
+import { createClient, createSession, modifyFile, sendFollowUp } from "./opencode.js";
 
 program
   .requiredOption("--prompt-file <path>", "Path to the prompt file")
@@ -12,6 +12,7 @@ program
   .option("--dry-run", "Print changes without writing files")
   .option("--build-filter <path>", "Run dotnet build on this project/solution and only process files with errors")
   .option("--build-output", "Print the raw dotnet build output")
+  .option("--retry-build <path>", "After modifying a file, build this project/solution and retry with errors (max 3 attempts)")
   .option("--base-url <url>", "OpenCode server base URL", "http://localhost:3000")
   .parse();
 
@@ -47,6 +48,28 @@ function getBuildErrorFiles(projectPath: string, printOutput: boolean): Set<stri
   }
 
   return errorFiles;
+}
+
+function getBuildErrors(projectPath: string, filePath: string): string[] {
+  let output: string;
+  try {
+    output = execSync(`dotnet build -tl:off ${JSON.stringify(projectPath)}`, {
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+  } catch (err: any) {
+    output = (err.stdout ?? "") + "\n" + (err.stderr ?? "");
+  }
+
+  const resolved = resolve(filePath);
+  const errors: string[] = [];
+  for (const line of output.split("\n")) {
+    const match = line.match(/^\s*(.*\.cs[\[(]\d+[,;]\d+[\])]\s*:\s*error\s.*)/);
+    if (match && resolve(match[1].split(/[\[(]/)[0]) === resolved) {
+      errors.push(line.trim());
+    }
+  }
+  return errors;
 }
 
 async function main() {
@@ -99,7 +122,7 @@ async function main() {
     const sessionId = await createSession(client);
 
     try {
-      const modified = await modifyFile(client, sessionId, prompt, filePath, fileContents);
+      let modified = await modifyFile(client, sessionId, prompt, filePath);
 
       if (fileContents === modified) {
         console.log("  No changes.");
@@ -114,6 +137,38 @@ async function main() {
       } else {
         writeFileSync(filePath, modified, "utf-8");
         console.log("  Written.");
+
+        if (opts.retryBuild) {
+          const maxRetries = 3;
+          for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            console.log(`  Build check (attempt ${attempt}/${maxRetries})...`);
+            const errors = getBuildErrors(opts.retryBuild, filePath);
+            if (errors.length === 0) {
+              console.log("  Build succeeded.");
+              break;
+            }
+            console.log(`  ${errors.length} build error(s), sending back to model...`);
+            const followUp = [
+              "The file still has build errors. Please fix them.",
+              "",
+              "Errors:",
+              ...errors,
+              "",
+              "Return ONLY the modified file contents, wrapped in a single ```csharp code block. Do not include any explanation.",
+            ].join("\n");
+            modified = await sendFollowUp(client, sessionId, followUp);
+            writeFileSync(filePath, modified, "utf-8");
+            console.log("  Written retry.");
+            if (attempt === maxRetries) {
+              const remaining = getBuildErrors(opts.retryBuild, filePath);
+              if (remaining.length > 0) {
+                console.log(`  Still ${remaining.length} error(s) after ${maxRetries} retries.`);
+              } else {
+                console.log("  Build succeeded.");
+              }
+            }
+          }
+        }
       }
     } catch (err) {
       console.error(`  Error processing ${filePath}:`, err);
