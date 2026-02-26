@@ -38,6 +38,14 @@ export async function modifyFile(
   });
 
   if (!data) throw new Error("No response from LLM");
+
+  // Print AI message parts
+  for (const part of data.parts) {
+    if (part.type === "text" && part.text) {
+      console.log(part.text);
+    }
+  }
+
   return extractCode(data.parts);
 }
 
