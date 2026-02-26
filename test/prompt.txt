@@ -1,0 +1,1 @@
+Refactor this C# class to use auto-properties instead of fields with getter/setter methods. Remove the explicit getter and setter methods and replace them with public properties. Keep the constructor and any methods that do more than simple get/set.
