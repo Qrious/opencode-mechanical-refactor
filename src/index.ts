@@ -20,7 +20,7 @@ function getBuildErrorFiles(projectPath: string): Set<string> {
   console.log(`Running dotnet build on ${projectPath}...`);
   let output: string;
   try {
-    output = execSync(`dotnet build ${JSON.stringify(projectPath)}`, {
+    output = execSync(`dotnet build -tl:off ${JSON.stringify(projectPath)}`, {
       encoding: "utf-8",
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -30,13 +30,21 @@ function getBuildErrorFiles(projectPath: string): Set<string> {
   }
 
   // Match MSBuild error lines like: /path/to/File.cs(10,5): error CS1234: message
+  // Also match bracket format: File.cs[10,5]: error CS1234: message
   const errorFiles = new Set<string>();
   for (const line of output.split("\n")) {
-    const match = line.match(/^\s*(.*\.cs)\(\d+,\d+\):\s*error\s/);
+    const match = line.match(/^\s*(.*\.cs)[\[(]\d+[,;]\d+[\])]\s*:\s*error\s/);
     if (match) {
       errorFiles.add(resolve(match[1]));
     }
   }
+
+  if (errorFiles.size === 0) {
+    // Debug: show build output so user can diagnose
+    console.log("Build output (no errors matched):");
+    console.log(output);
+  }
+
   return errorFiles;
 }
 
