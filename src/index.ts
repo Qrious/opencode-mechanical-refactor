@@ -11,12 +11,13 @@ program
   .option("--dir <path>", "Directory to recursively find .cs files in")
   .option("--dry-run", "Print changes without writing files")
   .option("--build-filter <path>", "Run dotnet build on this project/solution and only process files with errors")
+  .option("--build-output", "Print the raw dotnet build output")
   .option("--base-url <url>", "OpenCode server base URL", "http://localhost:3000")
   .parse();
 
 const opts = program.opts();
 
-function getBuildErrorFiles(projectPath: string): Set<string> {
+function getBuildErrorFiles(projectPath: string, printOutput: boolean): Set<string> {
   console.log(`Running dotnet build on ${projectPath}...`);
   let output: string;
   try {
@@ -39,10 +40,10 @@ function getBuildErrorFiles(projectPath: string): Set<string> {
     }
   }
 
-  if (errorFiles.size === 0) {
-    // Debug: show build output so user can diagnose
-    console.log("Build output (no errors matched):");
+  if (printOutput) {
+    console.log("--- dotnet build output ---");
     console.log(output);
+    console.log("--- end build output ---");
   }
 
   return errorFiles;
@@ -66,16 +67,18 @@ async function main() {
     );
   }
 
-  files = [...new Set(files.filter((f) => f.endsWith(".cs")))];
+  // Resolve all paths to absolute and deduplicate
+  files = [...new Set(files.filter((f) => f.endsWith(".cs")).map((f) => resolve(f)))];
 
   if (opts.buildFilter) {
-    const errorFiles = getBuildErrorFiles(opts.buildFilter);
+    const errorFiles = getBuildErrorFiles(opts.buildFilter, !!opts.buildOutput);
     if (errorFiles.size === 0) {
       console.log("dotnet build succeeded with no errors. Nothing to process.");
       process.exit(0);
     }
-    console.log(`Build errors found in ${errorFiles.size} file(s).`);
-    files = files.filter((f) => errorFiles.has(resolve(f)));
+    console.log(`Build errors found in ${errorFiles.size} file(s):`);
+    for (const f of errorFiles) console.log(`  ${f}`);
+    files = files.filter((f) => errorFiles.has(f));
   }
 
   if (files.length === 0) {
